@@ -181,12 +181,19 @@ export default function Scheduler() {
       // トークンクライアントを作成してすぐにリクエスト
       const client = window.google.accounts.oauth2.initTokenClient({
         client_id: clientId,
-        scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile',
+        scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.profile',
         callback: handleAuthCallback,
+        error_callback: (error: any) => {
+          console.error('❌ Token client error callback:', error);
+          alert(`認証エラー: ${JSON.stringify(error)}`);
+        },
       });
 
       console.log('✅ Token client initialized');
       console.log('📱 Requesting access token (popup should appear)...');
+      console.log('⚠️ If popup closes immediately, check:');
+      console.log('   1. OAuth consent screen - is your email added as test user?');
+      console.log('   2. APIs enabled - Calendar API and People API');
 
       client.requestAccessToken({ prompt: '' });
     } catch (error) {
