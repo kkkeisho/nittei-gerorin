@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
@@ -18,21 +18,22 @@ declare global {
   }
 }
 
+interface Event {
+  id: string;
+  title: string;
+  start: Date;
+  end: Date;
+}
+
 export default function Scheduler() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvents, setSelectedEvents] = useState<{ date: string, times: string[] }[]>([]);
   const [date, setDate] = useState(new Date());
   const [userName, setUserName] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [tokenClient, setTokenClient] = useState<any>(null);
+  const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
 
-  interface Event {
-    id: string;
-    title: string;
-    start: Date;
-    end: Date;
-  }
-
+  // Google Identity Servicesのスクリプトを読み込む
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -40,7 +41,13 @@ export default function Scheduler() {
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
     script.defer = true;
-    script.onload = initializeGoogleIdentityServices;
+    script.onload = () => {
+      console.log('✅ Google Identity Services loaded');
+      setIsGoogleLoaded(true);
+    };
+    script.onerror = () => {
+      console.error('❌ Failed to load Google Identity Services');
+    };
     document.body.appendChild(script);
 
     return () => {
@@ -50,53 +57,32 @@ export default function Scheduler() {
     };
   }, []);
 
-  const initializeGoogleIdentityServices = () => {
-    if (!window.google) {
-      console.error('Google Identity Services not loaded');
-      return;
-    }
-
-    const clientId = process.env.NEXT_PUBLIC_CLIENT_ID;
-    if (!clientId) {
-      console.error('NEXT_PUBLIC_CLIENT_ID is not defined');
-      return;
-    }
-
-    console.log('Initializing Google Identity Services with client ID:', clientId);
-
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/calendar.events',
-      callback: (response: any) => {
-        console.log('OAuth callback response:', response);
-        if (response.error) {
-          console.error('OAuth error:', response.error, response.error_description);
-          alert(`ログインエラー: ${response.error}\n${response.error_description || ''}`);
-          return;
-        }
-        console.log('Access token received successfully');
-        setAccessToken(response.access_token);
-        fetchUserProfile(response.access_token);
-        fetchEvents(response.access_token);
-      },
-    });
-
-    setTokenClient(client);
-  };
-
-  const fetchUserProfile = async (token: string) => {
+  // ユーザープロフィールを取得
+  const fetchUserProfile = useCallback(async (token: string) => {
+    console.log('📝 Fetching user profile...');
     try {
       const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await response.json();
-      setUserName(data.name);
-    } catch (error) {
-      console.error('Error fetching user profile:', error);
-    }
-  };
 
-  const fetchEvents = async (token: string) => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ User profile fetched:', data.name);
+      setUserName(data.name);
+      return data;
+    } catch (error) {
+      console.error('❌ Error fetching user profile:', error);
+      alert('ユーザー情報の取得に失敗しました');
+      throw error;
+    }
+  }, []);
+
+  // カレンダーイベントを取得
+  const fetchEvents = useCallback(async (token: string) => {
+    console.log('📅 Fetching calendar events...');
     try {
       const response = await fetch(
         'https://www.googleapis.com/calendar/v3/calendars/primary/events?' +
@@ -109,6 +95,11 @@ export default function Scheduler() {
         }),
         { headers: { Authorization: `Bearer ${token}` } }
       );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
       const fetchedEvents: Event[] = data.items?.map((item: any) => ({
         id: item.id,
@@ -116,45 +107,113 @@ export default function Scheduler() {
         start: new Date(item.start.dateTime || item.start.date),
         end: new Date(item.end.dateTime || item.end.date),
       })) || [];
+
+      console.log(`✅ Fetched ${fetchedEvents.length} events`);
       setEvents(fetchedEvents);
+      return fetchedEvents;
     } catch (error) {
-      console.error('Error fetching events:', error);
+      console.error('❌ Error fetching events:', error);
+      // カレンダーの取得失敗は致命的ではないので、エラーをスローしない
+      return [];
     }
-  };
+  }, []);
 
-  const handleLogin = () => {
-    console.log('Login button clicked');
-    if (tokenClient) {
-      console.log('Requesting access token...');
-      console.log('Note: A popup window should appear. If not, check your popup blocker.');
+  // OAuth コールバック処理
+  const handleAuthCallback = useCallback(async (response: any) => {
+    console.log('🔐 OAuth callback triggered');
+    console.log('Response:', response);
 
-      try {
-        tokenClient.requestAccessToken({ prompt: '' });
-        console.log('Access token request sent - waiting for user response...');
-        console.log('If nothing happens, please check:');
-        console.log('1. Popup blocker settings');
-        console.log('2. Google Cloud Console - Authorized JavaScript origins');
-        console.log('3. Google Cloud Console - Authorized redirect URIs');
-      } catch (error) {
-        console.error('Error requesting access token:', error);
-        alert('ログインリクエストの送信に失敗しました。\nエラー: ' + error);
-      }
-    } else {
-      console.error('Token client not initialized');
-      alert('認証システムの初期化に失敗しました。ページを再読み込みしてください。');
+    if (response.error) {
+      console.error('❌ OAuth error:', response.error);
+      console.error('Error description:', response.error_description);
+      alert(`認証エラーが発生しました:\n${response.error}\n${response.error_description || ''}`);
+      return;
     }
-  };
 
-  const handleLogout = () => {
-    if (accessToken) {
-      window.google?.accounts.oauth2.revoke(accessToken, () => {});
+    if (!response.access_token) {
+      console.error('❌ No access token in response');
+      alert('アクセストークンが取得できませんでした');
+      return;
     }
+
+    console.log('✅ Access token received');
+    setAccessToken(response.access_token);
+
+    try {
+      // ユーザー情報とカレンダーイベントを取得
+      await fetchUserProfile(response.access_token);
+      await fetchEvents(response.access_token);
+      console.log('✅ Login completed successfully');
+    } catch (error) {
+      console.error('❌ Error during post-auth data fetching:', error);
+      setAccessToken(null);
+      setUserName(null);
+    }
+  }, [fetchUserProfile, fetchEvents]);
+
+  // ログイン処理
+  const handleLogin = useCallback(() => {
+    console.log('🔵 Login button clicked');
+
+    if (!isGoogleLoaded) {
+      console.error('❌ Google Identity Services not loaded yet');
+      alert('認証システムが読み込まれていません。\nページを再読み込みしてください。');
+      return;
+    }
+
+    if (!window.google) {
+      console.error('❌ window.google is not available');
+      alert('Google認証が利用できません。\nページを再読み込みしてください。');
+      return;
+    }
+
+    const clientId = process.env.NEXT_PUBLIC_CLIENT_ID;
+    if (!clientId) {
+      console.error('❌ NEXT_PUBLIC_CLIENT_ID is not defined');
+      alert('クライアントIDが設定されていません。\n環境変数を確認してください。');
+      return;
+    }
+
+    console.log('🔑 Client ID:', clientId);
+    console.log('🚀 Initializing token client...');
+
+    try {
+      // トークンクライアントを作成してすぐにリクエスト
+      const client = window.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.profile',
+        callback: handleAuthCallback,
+      });
+
+      console.log('✅ Token client initialized');
+      console.log('📱 Requesting access token (popup should appear)...');
+
+      client.requestAccessToken({ prompt: '' });
+    } catch (error) {
+      console.error('❌ Error during login:', error);
+      alert(`ログイン処理でエラーが発生しました:\n${error}`);
+    }
+  }, [isGoogleLoaded, handleAuthCallback]);
+
+  // ログアウト処理
+  const handleLogout = useCallback(() => {
+    console.log('🔴 Logout button clicked');
+
+    if (accessToken && window.google) {
+      console.log('🔓 Revoking access token...');
+      window.google.accounts.oauth2.revoke(accessToken, () => {
+        console.log('✅ Token revoked');
+      });
+    }
+
     setAccessToken(null);
     setUserName(null);
     setEvents([]);
     setSelectedEvents([]);
-  };
+    console.log('✅ Logout completed');
+  }, [accessToken]);
 
+  // 日付フォーマット
   const formatDate = (date: Date) => {
     return moment(date).format('M月D日[(]ddd[)]').replace(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/g, match => {
       const map: { [key: string]: string } = { 'Mon': '月', 'Tue': '火', 'Wed': '水', 'Thu': '木', 'Fri': '金', 'Sat': '土', 'Sun': '日' };
@@ -164,6 +223,7 @@ export default function Scheduler() {
 
   const formatTime = (date: Date) => moment(date).format('HH:mm');
 
+  // イベント選択
   const handleSelectEvent = (event: Event) => {
     const date = formatDate(event.start);
     const time = `${formatTime(event.start)}-${formatTime(event.end)}`;
@@ -240,8 +300,8 @@ export default function Scheduler() {
               </div>
             )}
             {!userName ? (
-              <button onClick={handleLogin} className="btn btn-primary">
-                ログイン
+              <button onClick={handleLogin} className="btn btn-primary" disabled={!isGoogleLoaded}>
+                {isGoogleLoaded ? 'ログイン' : '読み込み中...'}
               </button>
             ) : (
               <button onClick={handleLogout} className="btn btn-danger">
