@@ -126,7 +126,19 @@ export default function Scheduler() {
     console.log('Login button clicked');
     if (tokenClient) {
       console.log('Requesting access token...');
-      tokenClient.requestAccessToken({ prompt: 'consent' });
+      console.log('Note: A popup window should appear. If not, check your popup blocker.');
+
+      try {
+        tokenClient.requestAccessToken({ prompt: '' });
+        console.log('Access token request sent - waiting for user response...');
+        console.log('If nothing happens, please check:');
+        console.log('1. Popup blocker settings');
+        console.log('2. Google Cloud Console - Authorized JavaScript origins');
+        console.log('3. Google Cloud Console - Authorized redirect URIs');
+      } catch (error) {
+        console.error('Error requesting access token:', error);
+        alert('ログインリクエストの送信に失敗しました。\nエラー: ' + error);
+      }
     } else {
       console.error('Token client not initialized');
       alert('認証システムの初期化に失敗しました。ページを再読み込みしてください。');
