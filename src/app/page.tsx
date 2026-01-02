@@ -51,16 +51,30 @@ export default function Scheduler() {
   }, []);
 
   const initializeGoogleIdentityServices = () => {
-    if (!window.google) return;
+    if (!window.google) {
+      console.error('Google Identity Services not loaded');
+      return;
+    }
 
     const clientId = process.env.NEXT_PUBLIC_CLIENT_ID;
-    if (!clientId) return;
+    if (!clientId) {
+      console.error('NEXT_PUBLIC_CLIENT_ID is not defined');
+      return;
+    }
+
+    console.log('Initializing Google Identity Services with client ID:', clientId);
 
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/calendar.events',
       callback: (response: any) => {
-        if (response.error) return;
+        console.log('OAuth callback response:', response);
+        if (response.error) {
+          console.error('OAuth error:', response.error, response.error_description);
+          alert(`ログインエラー: ${response.error}\n${response.error_description || ''}`);
+          return;
+        }
+        console.log('Access token received successfully');
         setAccessToken(response.access_token);
         fetchUserProfile(response.access_token);
         fetchEvents(response.access_token);
@@ -109,8 +123,13 @@ export default function Scheduler() {
   };
 
   const handleLogin = () => {
+    console.log('Login button clicked');
     if (tokenClient) {
+      console.log('Requesting access token...');
       tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+      console.error('Token client not initialized');
+      alert('認証システムの初期化に失敗しました。ページを再読み込みしてください。');
     }
   };
 
